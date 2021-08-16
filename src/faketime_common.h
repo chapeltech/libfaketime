@@ -32,6 +32,8 @@ struct system_time_s
   struct timespec mon;
   /* System time according to CLOCK_MONOTONIC_RAW */
   struct timespec mon_raw;
+  /* The time at which multiplication begins */
+  struct timespec mult;
 #ifdef CLOCK_BOOTTIME
   /* System time according to CLOCK_BOOTTIME */
   struct timespec boot;

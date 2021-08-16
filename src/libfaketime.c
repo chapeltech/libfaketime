@@ -21,6 +21,39 @@
  *      =======================================================================
  */
 
+/* XXXrcd: notes for hackery
+ *
+ * Simplifying assumption: multiplier start time must preceed process
+ * start time!  Even boottime must preceed the start time.
+ * 
+ * BUG: multiplying time doesn't happen if you don't explicitly set the
+ *      time---even to +0.
+ * BUG: alarm should be setitimer(2) due to rounding.
+ * 
+ * We don't need to modify because we mandate starttime.mult in the past:
+ * 
+ *         nanosleep()             -- no need
+ *         clock_nanosleep()       -- no need
+ *         usleep()                -- no need
+ *         sleep()                 -- no need
+ *         alarm()                 -- no need
+ *         ppoll()                 -- no need
+ *         epoll_wait()            -- no need
+ *         epoll_pwait()           -- no need
+ *         poll()                  -- no need
+ *         select()                -- no need
+ *         pselect()               -- no need
+ * 
+ *         sem_timedwait()         -- more complex, but no need.
+ * 
+ * We need to modify:
+ * 
+ *         timer_settime_common()  -- no clue.
+ *         time_gettime_common()   -- probably don't need to modify?
+ *         pthread_cond_timedwait_common() uses fake_clock_gettime(),
+ *         so it should be okay...
+ */
+
 #define _GNU_SOURCE             /* required to get RTLD_NEXT defined */
 
 #include <stdio.h>
@@ -318,13 +351,13 @@ static int force_cache_expiration = 0;
  * initialization declaration.
  */
 #ifndef CLOCK_BOOTTIME
-static struct system_time_s ftpl_starttime = {{0, -1}, {0, -1}, {0, -1}};
-static struct system_time_s ftpl_timecache = {{0, -1}, {0, -1}, {0, -1}};
-static struct system_time_s ftpl_faketimecache = {{0, -1}, {0, -1}, {0, -1}};
-#else
 static struct system_time_s ftpl_starttime = {{0, -1}, {0, -1}, {0, -1}, {0, -1}};
 static struct system_time_s ftpl_timecache = {{0, -1}, {0, -1}, {0, -1}, {0, -1}};
 static struct system_time_s ftpl_faketimecache = {{0, -1}, {0, -1}, {0, -1}, {0, -1}};
+#else
+static struct system_time_s ftpl_starttime = {{0, -1}, {0, -1}, {0, -1}, {0, -1}, {0, -1}};
+static struct system_time_s ftpl_timecache = {{0, -1}, {0, -1}, {0, -1}, {0, -1}, {0, -1}};
+static struct system_time_s ftpl_faketimecache = {{0, -1}, {0, -1}, {0, -1}, {0, -1}, {0, -1}};
 #endif
 
 static char user_faked_time_fmt[BUFSIZ] = {0};
@@ -2464,6 +2497,29 @@ parse_modifiers:
       {
         user_rate = atof(strchr(user_faked_time, 'x')+1);
         user_rate_set = true;
+        char *ftpl_start = strchr(user_faked_time, ':');
+        if (ftpl_start) {
+          user_faked_time_tm.tm_isdst = -1;
+fprintf(stderr, "parsing time: \"%s\" with \"%s\"\n", ftpl_start + 1, user_faked_time_fmt);
+          nstime_str = strptime(ftpl_start+1, user_faked_time_fmt, &user_faked_time_tm);
+fprintf(stderr, "ret = %p\n", nstime_str);
+fprintf(stderr, "seconds:   %d\n", user_faked_time_tm.tm_sec);
+fprintf(stderr, "minutes:   %d\n", user_faked_time_tm.tm_min);
+fprintf(stderr, "houurs:    %d\n", user_faked_time_tm.tm_hour);
+fprintf(stderr, "mday:      %d\n", user_faked_time_tm.tm_mday);
+fprintf(stderr, "mon:       %d\n", user_faked_time_tm.tm_mon);
+fprintf(stderr, "year:      %d\n", user_faked_time_tm.tm_year);
+fprintf(stderr, "wday:      %d\n", user_faked_time_tm.tm_wday);
+fprintf(stderr, "yday:      %d\n", user_faked_time_tm.tm_yday);
+fprintf(stderr, "isdst:     %d\n", user_faked_time_tm.tm_isdst);
+          if (NULL == nstime_str) {
+            fprintf(stderr, "NOT!\n");
+            _exit(1);
+          }
+          ftpl_starttime.mult.tv_sec  = mktime(&user_faked_time_tm);
+          ftpl_starttime.mult.tv_nsec = 0;
+fprintf(stderr, "1:starting at %ld\n", ftpl_starttime.mult.tv_sec);
+        }
         if (NULL != getenv("FAKETIME_XRESET")) {
           if (ftpl_timecache.real.tv_nsec >= 0) {
             user_faked_time_timespec.tv_sec  = ftpl_faketimecache.real.tv_sec;
@@ -2474,12 +2530,20 @@ parse_modifiers:
             ftpl_starttime.mon.tv_nsec       = ftpl_timecache.mon.tv_nsec;
             ftpl_starttime.mon_raw.tv_sec    = ftpl_timecache.mon_raw.tv_sec;
             ftpl_starttime.mon_raw.tv_nsec   = ftpl_timecache.mon_raw.tv_nsec;
+
+            if (ftpl_starttime.mult.tv_sec == 0) {
+              ftpl_starttime.mult.tv_sec     = ftpl_starttime.real.tv_sec;
+              ftpl_starttime.mult.tv_nsec    = ftpl_starttime.real.tv_nsec;
+            }
+
 #ifdef CLOCK_BOOTTIME
             ftpl_starttime.boot.tv_sec       = ftpl_timecache.boot.tv_sec;
             ftpl_starttime.boot.tv_nsec      = ftpl_timecache.boot.tv_nsec;
 #endif
           }
         }
+fprintf(stderr, "let's multiply by: %f\n", user_rate);
+fprintf(stderr, "2:starting at %ld\n", ftpl_starttime.mult.tv_sec);
       }
       else if (NULL != (tmp_time_fmt = strchr(user_faked_time, 'i')))
       {
